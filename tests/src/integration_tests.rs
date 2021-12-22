@@ -10,8 +10,7 @@ mod tests {
         account::{self, AccountHash},
         runtime_args,
         system::mint,
-        ContractHash, ContractVersion, ContractVersionKey, Key, PublicKey, RuntimeArgs, SecretKey,
-        StoredValue, U512,
+        ContractVersion, Key, PublicKey, RuntimeArgs, SecretKey, U512,
     };
 
     const MY_ACCOUNT: [u8; 32] = [7u8; 32];
@@ -24,6 +23,8 @@ mod tests {
     const ARG_NTH_FIB: &str = "nth_fib";
     const INSTALLER_WASM: &str = "installer.wasm";
     const UPGRADER_WASM: &str = "upgrader.wasm";
+    const EXPECTED_FIB_RESULT_BEFORE_UPGRADE: u64 = 89;
+    const EXPECTED_FIB_RESULT_AFTER_UPGRADE: u64 = 274;
 
     #[test]
     fn installed_fib_contract_should_fib() {
@@ -42,6 +43,7 @@ mod tests {
                     mint::ARG_TARGET => my_public_key,
                     mint::ARG_ID => <Option::<u64>>::None
                 })
+                .with_deploy_hash([1; 32])
                 .build();
 
             ExecuteRequestBuilder::from_deploy_item(deploy_item).build()
@@ -56,10 +58,13 @@ mod tests {
             .commit();
 
         // The named key that stores the contract package hash should not exist before running the installer session.
-        assert!(!builder
-            .get_expected_account(my_account_hash)
-            .named_keys()
-            .contains_key(CONTRACT_HASH_NAMED_KEY));
+        assert!(
+            !builder
+                .get_expected_account(my_account_hash)
+                .named_keys()
+                .contains_key(CONTRACT_HASH_NAMED_KEY),
+            "account should not have contract hash named key"
+        );
 
         let install_fib_stored_contract_request = {
             let deploy_item = DeployItemBuilder::new()
@@ -67,6 +72,7 @@ mod tests {
                 .with_authorization_keys(&[my_account_hash.to_owned()])
                 .with_empty_payment_bytes(runtime_args! {ARG_AMOUNT => *DEFAULT_PAYMENT})
                 .with_session_code(PathBuf::from(INSTALLER_WASM), runtime_args! {})
+                .with_deploy_hash([2; 32])
                 .build();
 
             ExecuteRequestBuilder::from_deploy_item(deploy_item).build()
@@ -78,10 +84,13 @@ mod tests {
             .commit();
 
         // The named key that stores the contract package hash should exist after deploying the installer session.
-        assert!(builder
-            .get_expected_account(my_account_hash)
-            .named_keys()
-            .contains_key(CONTRACT_HASH_NAMED_KEY));
+        assert!(
+            builder
+                .get_expected_account(my_account_hash)
+                .named_keys()
+                .contains_key(CONTRACT_HASH_NAMED_KEY),
+            "account should have contract hash named key"
+        );
 
         // get the contract version and assert that it's an expected value.
         let contract_version = builder
@@ -97,7 +106,7 @@ mod tests {
             .into_t::<ContractVersion>()
             .expect("failed to convert to contract version");
 
-        assert_eq!(contract_version, 1);
+        assert_eq!(contract_version, 1, "contract version should be 1");
 
         let call_fib_request = {
             let deploy_item = DeployItemBuilder::new()
@@ -110,6 +119,7 @@ mod tests {
                     CONTRACT_ENTRY_POINT_NAME,
                     runtime_args! {ARG_NTH_FIB => 9u64},
                 )
+                .with_deploy_hash([3; 32])
                 .build();
             ExecuteRequestBuilder::from_deploy_item(deploy_item).build()
         };
@@ -133,8 +143,11 @@ mod tests {
             .into_t::<u64>()
             .expect("failed to convert cl value into u64");
 
-        // fib.nth(9) should equal 89
-        assert_eq!(last_fib_result, 89);
+        assert_eq!(
+            last_fib_result, EXPECTED_FIB_RESULT_BEFORE_UPGRADE,
+            "fib result is {} and should be {}",
+            last_fib_result, EXPECTED_FIB_RESULT_BEFORE_UPGRADE
+        );
 
         let stored_contract_package_hash_before = builder
             .get_expected_account(my_account_hash)
@@ -151,6 +164,7 @@ mod tests {
                 .with_authorization_keys(&[my_account_hash])
                 .with_empty_payment_bytes(runtime_args! {ARG_AMOUNT => *DEFAULT_PAYMENT})
                 .with_session_code(PathBuf::from(UPGRADER_WASM), runtime_args! {})
+                .with_deploy_hash([4; 32])
                 .build();
 
             ExecuteRequestBuilder::from_deploy_item(deploy_item).build()
@@ -174,7 +188,7 @@ mod tests {
             .into_t::<ContractVersion>()
             .expect("failed to convert cl value to contract version");
 
-        assert_eq!(contract_version, 2);
+        assert_eq!(contract_version, 2, "contract version should be 2");
 
         let stored_contract_package_hash_after = builder
             .get_expected_account(my_account_hash)
@@ -185,74 +199,49 @@ mod tests {
             .expect("failed to convert into hash");
 
         assert_eq!(
-            stored_contract_package_hash_before,
-            stored_contract_package_hash_after
+            stored_contract_package_hash_before, stored_contract_package_hash_after,
+            "contract package hash should not change after upgrade"
         );
-        // let contract_package = builder
-        //     .query(
-        //         None,
-        //         Key::Account(my_account_hash),
-        //         &[CONTRACT_PACKAGE_HASH_NAMED_KEY.to_string()],
-        //     )
-        //     .expect("failed to find contract package")
-        //     .as_cl_value()
-        //     .expect("failed to convert to cl value")
-        //     .to_owned()
-        //     .into_t::<ContractPackage>()
-        //     .expect("failed to convert into contract package");
-
-        let stored_contract_package_hash = builder
-            .get_expected_account(my_account_hash)
-            .named_keys()
-            .get(CONTRACT_PACKAGE_HASH_NAMED_KEY)
-            .expect("failed to get contract package key")
-            .into_hash()
-            .expect("failed to convert into hash");
-
-        let contract_package = builder
-            .get_contract_package(stored_contract_package_hash.into())
-            .expect("failed to get contract package");
-
-        let contract_hash = contract_package
-            .lookup_contract_hash(ContractVersionKey::new(1, 1))
-            .expect("failed to get contract version")
-            .to_owned();
 
         let contract = builder
-            .get_contract(contract_hash.clone())
-            .expect("failed to get contract");
-
-        let wasm_hash: ContractHash = contract.contract_wasm_hash().value().into();
-
-        let wasm = {
-            let ref this = builder;
-            let contract_value: StoredValue = this
-                .query(None, wasm_hash.into(), &[])
-                .expect("should have contract value");
-
-            if let StoredValue::ContractWasm(contract_wasm) = contract_value {
-                contract_wasm
-            } else {
-                panic!("{:?}", contract_value);
-            }
-        };
-        // .expect("failed to get contract wasm hash");
+            .get_expected_account(my_account_hash)
+            .named_keys()
+            .get(CONTRACT_HASH_NAMED_KEY)
+            .expect("failed to get contract hash named key")
+            .to_owned();
 
         let call_fib_request = {
             let deploy_item = DeployItemBuilder::new()
                 .with_address(my_account_hash)
                 .with_authorization_keys(&[my_account_hash])
                 .with_empty_payment_bytes(runtime_args! {ARG_AMOUNT => *DEFAULT_PAYMENT})
-                .with_stored_session_named_key(
-                    CONTRACT_HASH_NAMED_KEY,
+                .with_stored_versioned_contract_by_name(
+                    CONTRACT_PACKAGE_HASH_NAMED_KEY,
+                    None,
                     CONTRACT_ENTRY_POINT_NAME,
                     runtime_args! {ARG_NTH_FIB => 9u64},
                 )
+                .with_deploy_hash([5; 32])
                 .build();
             ExecuteRequestBuilder::from_deploy_item(deploy_item).build()
         };
 
         builder.exec(call_fib_request).expect_success().commit();
+
+        let last_fib_result = builder
+            .query(None, contract, &[LAST_RESULT_NAMED_KEY.to_string()])
+            .expect("failed to get last result named key")
+            .as_cl_value()
+            .expect("failed to convert to cl value")
+            .to_owned()
+            .into_t::<u64>()
+            .expect("failed to convert cl value into u64");
+
+        assert_eq!(
+            last_fib_result, EXPECTED_FIB_RESULT_AFTER_UPGRADE,
+            "fib result after upgrade is {} and should be {}",
+            last_fib_result, EXPECTED_FIB_RESULT_AFTER_UPGRADE
+        );
     }
 }
 
