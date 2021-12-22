@@ -3,11 +3,14 @@ prepare:
 
 build-contract:
 	cd contract && cargo build --release --target wasm32-unknown-unknown
+	cd contract && cargo build --release --bin upgrader --target wasm32-unknown-unknown
 	wasm-strip contract/target/wasm32-unknown-unknown/release/installer.wasm 2>/dev/null | true
+	wasm-strip contract/target/wasm32-unknown-unknown/release/upgrader.wasm 2>/dev/null | true
 
 test: build-contract
 	mkdir -p tests/wasm
 	cp contract/target/wasm32-unknown-unknown/release/installer.wasm tests/wasm
+	cp contract/target/wasm32-unknown-unknown/release/upgrader.wasm tests/wasm
 	cd tests && cargo test
 
 clippy:

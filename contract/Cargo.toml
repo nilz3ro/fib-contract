@@ -14,12 +14,12 @@ bench = false
 doctest = false
 test = false
 
-# [[bin]]
-# name = "updater"
-# path = "src/updater.rs"
-# bench = false
-# doctest = false
-# test = false
+[[bin]]
+name = "upgrader"
+path = "src/upgrader.rs"
+bench = false
+doctest = false
+test = false
 
 [profile.release]
 codegen-units = 1
